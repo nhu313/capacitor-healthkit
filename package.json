@@ -9,6 +9,7 @@
   "files": [
     "dist/",
     "ios/Plugin/",
+    "Package.swift",
     "PerfoodCapacitorHealthkit.podspec"
   ],
   "author": "Perfood GmbH",

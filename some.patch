@@ -1,0 +1,157 @@
+diff --git a/node_modules/@perfood/capacitor-healthkit/package.json b/node_modules/@perfood/capacitor-healthkit/package.json
+index 1c23e57..e041b13 100644
+--- a/node_modules/@perfood/capacitor-healthkit/package.json
++++ b/node_modules/@perfood/capacitor-healthkit/package.json
+@@ -9,6 +9,7 @@
+   "files": [
+     "dist/",
+     "ios/Plugin/",
++    "Package.swift",
+     "PerfoodCapacitorHealthkit.podspec"
+   ],
+   "author": "Perfood GmbH",
+diff --git a/node_modules/@perfood/capacitor-healthkit/PerfoodCapacitorHealthkit.podspec b/node_modules/@perfood/capacitor-healthkit/PerfoodCapacitorHealthkit.podspec
+index a80a52c..3a05152 100644
+--- a/node_modules/@perfood/capacitor-healthkit/PerfoodCapacitorHealthkit.podspec
++++ b/node_modules/@perfood/capacitor-healthkit/PerfoodCapacitorHealthkit.podspec
+@@ -10,7 +10,7 @@ Pod::Spec.new do |s|
+   s.homepage = package['repository']['url']
+   s.author = package['author']
+   s.source = { :git => package['repository']['url'], :tag => s.version.to_s }
+-  s.source_files = 'ios/Plugin/**/*.{swift,h,m,c,cc,mm,cpp}'
++  s.source_files = 'ios/Plugin/**/*.swift'
+   s.ios.deployment_target  = '12.0'
+   s.dependency 'Capacitor'
+   s.swift_version = '5.1'
+diff --git a/node_modules/@perfood/capacitor-healthkit/Package.swift b/node_modules/@perfood/capacitor-healthkit/Package.swift
+new file mode 100644
+--- /dev/null
++++ b/node_modules/@perfood/capacitor-healthkit/Package.swift
+@@ -0,0 +1,30 @@
++// swift-tools-version: 5.9
++import PackageDescription
++
++let package = Package(
++    name: "PerfoodCapacitorHealthkit",
++    platforms: [.iOS(.v15)],
++    products: [
++        .library(
++            name: "PerfoodCapacitorHealthkit",
++            targets: ["CapacitorHealthkitPlugin"])
++    ],
++    dependencies: [
++        .package(url: "https://github.com/ionic-team/capacitor-swift-pm.git", from: "8.0.0")
++    ],
++    targets: [
++        .target(
++            name: "CapacitorHealthkitPlugin",
++            dependencies: [
++                .product(name: "Capacitor", package: "capacitor-swift-pm"),
++                .product(name: "Cordova", package: "capacitor-swift-pm")
++            ],
++            path: "ios/Plugin",
++            exclude: [
++                "Info.plist",
++                "CapacitorHealthkitPlugin.h",
++                "CapacitorHealthkitPlugin.m"
++            ],
++            sources: ["CapacitorHealthkitPlugin.swift"])
++    ]
++)
+diff --git a/node_modules/@perfood/capacitor-healthkit/ios/Plugin/CapacitorHealthkitPlugin.m b/node_modules/@perfood/capacitor-healthkit/ios/Plugin/CapacitorHealthkitPlugin.m
+index 9c49184..221b499 100644
+--- a/node_modules/@perfood/capacitor-healthkit/ios/Plugin/CapacitorHealthkitPlugin.m
++++ b/node_modules/@perfood/capacitor-healthkit/ios/Plugin/CapacitorHealthkitPlugin.m
+@@ -10,4 +10,5 @@ CAP_PLUGIN(CapacitorHealthkitPlugin, "CapacitorHealthkit",
+            CAP_PLUGIN_METHOD(multipleQueryHKitSampleType, CAPPluginReturnPromise);
+            CAP_PLUGIN_METHOD(isEditionAuthorized, CAPPluginReturnPromise);
+            CAP_PLUGIN_METHOD(multipleIsEditionAuthorized, CAPPluginReturnPromise);
++           CAP_PLUGIN_METHOD(saveSamples, CAPPluginReturnPromise);
+ )
+diff --git a/node_modules/@perfood/capacitor-healthkit/ios/Plugin/CapacitorHealthkitPlugin.swift b/node_modules/@perfood/capacitor-healthkit/ios/Plugin/CapacitorHealthkitPlugin.swift
+--- a/node_modules/@perfood/capacitor-healthkit/ios/Plugin/CapacitorHealthkitPlugin.swift
++++ b/node_modules/@perfood/capacitor-healthkit/ios/Plugin/CapacitorHealthkitPlugin.swift
+@@ -9,7 +9,19 @@ var healthStore = HKHealthStore()
+  * here: https://capacitorjs.com/docs/plugins/ios
+  */
+ @objc(CapacitorHealthkitPlugin)
+-public class CapacitorHealthkitPlugin: CAPPlugin {
++public class CapacitorHealthkitPlugin: CAPPlugin, CAPBridgedPlugin {
++    public let identifier = "CapacitorHealthkitPlugin"
++    public let jsName = "CapacitorHealthkit"
++    public let pluginMethods: [CAPPluginMethod] = [
++        CAPPluginMethod(name: "requestAuthorization", returnType: CAPPluginReturnPromise),
++        CAPPluginMethod(name: "queryHKitSampleType", returnType: CAPPluginReturnPromise),
++        CAPPluginMethod(name: "isAvailable", returnType: CAPPluginReturnPromise),
++        CAPPluginMethod(name: "multipleQueryHKitSampleType", returnType: CAPPluginReturnPromise),
++        CAPPluginMethod(name: "isEditionAuthorized", returnType: CAPPluginReturnPromise),
++        CAPPluginMethod(name: "multipleIsEditionAuthorized", returnType: CAPPluginReturnPromise),
++        CAPPluginMethod(name: "saveSamples", returnType: CAPPluginReturnPromise)
++    ]
++
+     enum HKSampleError: Error {
+         case sleepRequestFailed
+         case workoutRequestFailed
+@@ -502,6 +514,62 @@ public class CapacitorHealthkitPlugin: CAPPlugin {
+         return formatter.date(from: inputDate)!
+     }
+
++    /// Save synthetic glucose, steps, and heart rate samples to HealthKit. Payload shape: glucose: [{ valueMgDl, timestamp }], steps: [{ steps, startTimestamp, endTimestamp }], heartRate: [{ bpm, timestamp }].
++    @objc func saveSamples(_ call: CAPPluginCall) {
++        if !HKHealthStore.isHealthDataAvailable() {
++            return call.reject("Health data not available")
++        }
++        var samplesToSave: [HKSample] = []
++        let mgPerDL = HKUnit.gramUnit(with: .milli).unitDivided(by: HKUnit.literUnit(with: .deci))
++        let heartRateUnit = HKUnit(from: "count/min")
++
++        if let glucoseArr = call.options["glucose"] as? [[String: Any]] {
++            guard let quantityType = HKQuantityType.quantityType(forIdentifier: .bloodGlucose) else { return call.reject("bloodGlucose type unavailable") }
++            for item in glucoseArr {
++                guard let valueMgDl = (item["valueMgDl"] as? NSNumber)?.doubleValue,
++                      let ts = item["timestamp"] as? String else { continue }
++                let date = getDateFromString(inputDate: ts)
++                let q = HKQuantity(unit: mgPerDL, doubleValue: valueMgDl)
++                let sample = HKQuantitySample(type: quantityType, quantity: q, start: date, end: date)
++                samplesToSave.append(sample)
++            }
++        }
++        if let stepsArr = call.options["steps"] as? [[String: Any]] {
++            guard let quantityType = HKQuantityType.quantityType(forIdentifier: .stepCount) else { return call.reject("stepCount type unavailable") }
++            for item in stepsArr {
++                guard let steps = (item["steps"] as? NSNumber)?.intValue ?? (item["steps"] as? Int),
++                      let startStr = item["startTimestamp"] as? String,
++                      let endStr = item["endTimestamp"] as? String else { continue }
++                let startDate = getDateFromString(inputDate: startStr)
++                let endDate = getDateFromString(inputDate: endStr)
++                let q = HKQuantity(unit: HKUnit.count(), doubleValue: Double(steps))
++                let sample = HKQuantitySample(type: quantityType, quantity: q, start: startDate, end: endDate)
++                samplesToSave.append(sample)
++            }
++        }
++        if let hrArr = call.options["heartRate"] as? [[String: Any]] {
++            guard let quantityType = HKQuantityType.quantityType(forIdentifier: .heartRate) else { return call.reject("heartRate type unavailable") }
++            for item in hrArr {
++                guard let bpm = (item["bpm"] as? NSNumber)?.doubleValue ?? (item["bpm"] as? Double),
++                      let ts = item["timestamp"] as? String else { continue }
++                let date = getDateFromString(inputDate: ts)
++                let q = HKQuantity(unit: heartRateUnit, doubleValue: bpm)
++                let sample = HKQuantitySample(type: quantityType, quantity: q, start: date, end: date)
++                samplesToSave.append(sample)
++            }
++        }
++        if samplesToSave.isEmpty {
++            return call.resolve()
++        }
++        healthStore.save(samplesToSave) { _, error in
++            if let error = error {
++                call.reject(error.localizedDescription)
++            } else {
++                call.resolve()
++            }
++        }
++    }
++
+
+     @objc func requestAuthorization(_ call: CAPPluginCall) {
+         if !HKHealthStore.isHealthDataAvailable() {
