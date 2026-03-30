@@ -9,7 +9,18 @@ var healthStore = HKHealthStore()
  * here: https://capacitorjs.com/docs/plugins/ios
  */
 @objc(CapacitorHealthkitPlugin)
-public class CapacitorHealthkitPlugin: CAPPlugin {
+public class CapacitorHealthkitPlugin: CAPPlugin, CAPBridgedPlugin {
+    public let identifier = "CapacitorHealthkitPlugin"
+    public let jsName = "CapacitorHealthkit"
+    public let pluginMethods: [CAPPluginMethod] = [
+        CAPPluginMethod(name: "requestAuthorization", returnType: CAPPluginReturnPromise),
+        CAPPluginMethod(name: "queryHKitSampleType", returnType: CAPPluginReturnPromise),
+        CAPPluginMethod(name: "isAvailable", returnType: CAPPluginReturnPromise),
+        CAPPluginMethod(name: "multipleQueryHKitSampleType", returnType: CAPPluginReturnPromise),
+        CAPPluginMethod(name: "isEditionAuthorized", returnType: CAPPluginReturnPromise),
+        CAPPluginMethod(name: "multipleIsEditionAuthorized", returnType: CAPPluginReturnPromise),
+        CAPPluginMethod(name: "saveSamples", returnType: CAPPluginReturnPromise)
+    ]
 
     enum HKSampleError: Error {
         case sleepRequestFailed
@@ -502,7 +513,62 @@ public class CapacitorHealthkitPlugin: CAPPlugin {
         return formatter.date(from: inputDate)!
     }
 
-    
+    /// Save synthetic glucose, steps, and heart rate samples to HealthKit. Payload shape: glucose: [{ valueMgDl, timestamp }], steps: [{ steps, startTimestamp, endTimestamp }], heartRate: [{ bpm, timestamp }].
+    @objc func saveSamples(_ call: CAPPluginCall) {
+        if !HKHealthStore.isHealthDataAvailable() {
+            return call.reject("Health data not available")
+        }
+        var samplesToSave: [HKSample] = []
+        let mgPerDL = HKUnit.gramUnit(with: .milli).unitDivided(by: HKUnit.literUnit(with: .deci))
+        let heartRateUnit = HKUnit(from: "count/min")
+
+        if let glucoseArr = call.options["glucose"] as? [[String: Any]] {
+            guard let quantityType = HKQuantityType.quantityType(forIdentifier: .bloodGlucose) else { return call.reject("bloodGlucose type unavailable") }
+            for item in glucoseArr {
+                guard let valueMgDl = (item["valueMgDl"] as? NSNumber)?.doubleValue,
+                      let ts = item["timestamp"] as? String else { continue }
+                let date = getDateFromString(inputDate: ts)
+                let q = HKQuantity(unit: mgPerDL, doubleValue: valueMgDl)
+                let sample = HKQuantitySample(type: quantityType, quantity: q, start: date, end: date)
+                samplesToSave.append(sample)
+            }
+        }
+        if let stepsArr = call.options["steps"] as? [[String: Any]] {
+            guard let quantityType = HKQuantityType.quantityType(forIdentifier: .stepCount) else { return call.reject("stepCount type unavailable") }
+            for item in stepsArr {
+                guard let steps = (item["steps"] as? NSNumber)?.intValue ?? (item["steps"] as? Int),
+                      let startStr = item["startTimestamp"] as? String,
+                      let endStr = item["endTimestamp"] as? String else { continue }
+                let startDate = getDateFromString(inputDate: startStr)
+                let endDate = getDateFromString(inputDate: endStr)
+                let q = HKQuantity(unit: HKUnit.count(), doubleValue: Double(steps))
+                let sample = HKQuantitySample(type: quantityType, quantity: q, start: startDate, end: endDate)
+                samplesToSave.append(sample)
+            }
+        }
+        if let hrArr = call.options["heartRate"] as? [[String: Any]] {
+            guard let quantityType = HKQuantityType.quantityType(forIdentifier: .heartRate) else { return call.reject("heartRate type unavailable") }
+            for item in hrArr {
+                guard let bpm = (item["bpm"] as? NSNumber)?.doubleValue ?? (item["bpm"] as? Double),
+                      let ts = item["timestamp"] as? String else { continue }
+                let date = getDateFromString(inputDate: ts)
+                let q = HKQuantity(unit: heartRateUnit, doubleValue: bpm)
+                let sample = HKQuantitySample(type: quantityType, quantity: q, start: date, end: date)
+                samplesToSave.append(sample)
+            }
+        }
+        if samplesToSave.isEmpty {
+            return call.resolve()
+        }
+        healthStore.save(samplesToSave) { _, error in
+            if let error = error {
+                call.reject(error.localizedDescription)
+            } else {
+                call.resolve()
+            }
+        }
+    }
+
     @objc func requestAuthorization(_ call: CAPPluginCall) {
         if !HKHealthStore.isHealthDataAvailable() {
             return call.reject("Health data not available")
