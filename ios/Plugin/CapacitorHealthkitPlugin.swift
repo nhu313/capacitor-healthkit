@@ -19,7 +19,8 @@ public class CapacitorHealthkitPlugin: CAPPlugin, CAPBridgedPlugin {
         CAPPluginMethod(name: "multipleQueryHKitSampleType", returnType: CAPPluginReturnPromise),
         CAPPluginMethod(name: "isEditionAuthorized", returnType: CAPPluginReturnPromise),
         CAPPluginMethod(name: "multipleIsEditionAuthorized", returnType: CAPPluginReturnPromise),
-        CAPPluginMethod(name: "saveSamples", returnType: CAPPluginReturnPromise)
+        CAPPluginMethod(name: "saveSamples", returnType: CAPPluginReturnPromise),
+        CAPPluginMethod(name: "openHealthSettings", returnType: CAPPluginReturnPromise)
     ]
 
     enum HKSampleError: Error {
@@ -637,6 +638,18 @@ public class CapacitorHealthkitPlugin: CAPPlugin, CAPBridgedPlugin {
             return call.resolve()
         } else {
             return call.reject("Health data not available")
+        }
+    }
+
+    @objc func openHealthSettings(_ call: CAPPluginCall) {
+        DispatchQueue.main.async {
+            guard let url = URL(string: "x-apple-health://") else {
+                call.resolve()
+                return
+            }
+            UIApplication.shared.open(url, options: [:]) { _ in
+                call.resolve()
+            }
         }
     }
 
