@@ -643,12 +643,23 @@ public class CapacitorHealthkitPlugin: CAPPlugin, CAPBridgedPlugin {
 
     @objc func openHealthSettings(_ call: CAPPluginCall) {
         DispatchQueue.main.async {
-            guard let url = URL(string: "x-apple-health://") else {
+            // Best-effort: Privacy → Health (undocumented prefs URL; may fail on some iOS versions).
+            // Fallback: this app’s Settings (Health section) via UIApplication.openSettingsURLString.
+            let appSettings = URL(string: UIApplication.openSettingsURLString)
+            let privacyHealth = URL(string: "App-prefs:root=Privacy&path=HEALTH")
+            guard let appSettings else {
                 call.resolve()
                 return
             }
-            UIApplication.shared.open(url, options: [:]) { _ in
-                call.resolve()
+            let primary = privacyHealth ?? appSettings
+            UIApplication.shared.open(primary, options: [:]) { opened in
+                if opened {
+                    call.resolve()
+                    return
+                }
+                UIApplication.shared.open(appSettings, options: [:]) { _ in
+                    call.resolve()
+                }
             }
         }
     }
