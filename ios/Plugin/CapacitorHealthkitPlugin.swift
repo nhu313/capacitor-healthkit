@@ -643,36 +643,15 @@ public class CapacitorHealthkitPlugin: CAPPlugin, CAPBridgedPlugin {
 
     @objc func openHealthSettings(_ call: CAPPluginCall) {
         DispatchQueue.main.async {
-            // Three-stage deep-link (all undocumented except the last):
-            //   1. Privacy > Health > Data Access & Devices > this app (bundle ID path)
-            //   2. Privacy > Health listing
-            //   3. This app's own Settings page, Health section (Apple documented)
-            guard let appSettings = URL(string: UIApplication.openSettingsURLString) else {
+            // UIApplication.openSettingsURLString is the only documented Apple URL for this.
+            // It opens Settings → [App Name], which includes the Health read/write toggles.
+            // App-prefs: deep links are not reliable across iOS versions and may land at root.
+            guard let url = URL(string: UIApplication.openSettingsURLString) else {
                 call.resolve()
                 return
             }
-            let bundleID = Bundle.main.bundleIdentifier ?? ""
-            let deepHealth = URL(string: "App-prefs:Privacy&path=HEALTH/\(bundleID)")
-            let privacyHealth = URL(string: "App-prefs:Privacy&path=HEALTH")
-
-            func tryOpen(_ url: URL, next: (() -> Void)?) {
-                UIApplication.shared.open(url, options: [:]) { opened in
-                    if opened { call.resolve() } else { next?() }
-                }
-            }
-
-            if let deepHealth {
-                tryOpen(deepHealth) {
-                    if let privacyHealth {
-                        tryOpen(privacyHealth) { tryOpen(appSettings, next: nil) }
-                    } else {
-                        tryOpen(appSettings, next: nil)
-                    }
-                }
-            } else if let privacyHealth {
-                tryOpen(privacyHealth) { tryOpen(appSettings, next: nil) }
-            } else {
-                tryOpen(appSettings, next: nil)
+            UIApplication.shared.open(url, options: [:]) { _ in
+                call.resolve()
             }
         }
     }
