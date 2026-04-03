@@ -643,23 +643,36 @@ public class CapacitorHealthkitPlugin: CAPPlugin, CAPBridgedPlugin {
 
     @objc func openHealthSettings(_ call: CAPPluginCall) {
         DispatchQueue.main.async {
-            // Best-effort: Privacy → Health (undocumented prefs URL; may fail on some iOS versions).
-            // Fallback: this app’s Settings (Health section) via UIApplication.openSettingsURLString.
-            let appSettings = URL(string: UIApplication.openSettingsURLString)
-            let privacyHealth = URL(string: "App-prefs:root=Privacy&path=HEALTH")
-            guard let appSettings else {
+            // Three-stage deep-link (all undocumented except the last):
+            //   1. Privacy > Health > Data Access & Devices > this app (bundle ID path)
+            //   2. Privacy > Health listing
+            //   3. This app's own Settings page, Health section (Apple documented)
+            guard let appSettings = URL(string: UIApplication.openSettingsURLString) else {
                 call.resolve()
                 return
             }
-            let primary = privacyHealth ?? appSettings
-            UIApplication.shared.open(primary, options: [:]) { opened in
-                if opened {
-                    call.resolve()
-                    return
+            let bundleID = Bundle.main.bundleIdentifier ?? ""
+            let deepHealth = URL(string: "App-prefs:Privacy&path=HEALTH/\(bundleID)")
+            let privacyHealth = URL(string: "App-prefs:Privacy&path=HEALTH")
+
+            func tryOpen(_ url: URL, next: (() -> Void)?) {
+                UIApplication.shared.open(url, options: [:]) { opened in
+                    if opened { call.resolve() } else { next?() }
                 }
-                UIApplication.shared.open(appSettings, options: [:]) { _ in
-                    call.resolve()
+            }
+
+            if let deepHealth {
+                tryOpen(deepHealth) {
+                    if let privacyHealth {
+                        tryOpen(privacyHealth) { tryOpen(appSettings, next: nil) }
+                    } else {
+                        tryOpen(appSettings, next: nil)
+                    }
                 }
+            } else if let privacyHealth {
+                tryOpen(privacyHealth) { tryOpen(appSettings, next: nil) }
+            } else {
+                tryOpen(appSettings, next: nil)
             }
         }
     }
